@@ -22,7 +22,6 @@ impl Ray {
 
 #[derive(Copy, Clone, Debug)]
 struct Hit {
-    t: f32,
     point: Vec3,
     normal: Vec3,
     material: Material,
@@ -36,39 +35,26 @@ trait Object {
 struct Sphere {
     center: Vec3,
     radius: f32,
-    material: Material,
 }
 
-impl Object for Sphere {
-    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<Hit> {
+impl Sphere {
+    fn hit(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<f32> {
         let oc = ray.origin - self.center;
-        let a = ray.direction.dot(ray.direction);
         let b = oc.dot(ray.direction);
         let c = oc.dot(oc) - self.radius * self.radius;
-        let discriminant = b * b - a * c;
+        let discriminant = b * b - c;
         if discriminant > 0.0 {
-            let desc_sqrt = discriminant.sqrt();
-            let t0 = (-b - desc_sqrt) / a;
-            let t1 = (-b + desc_sqrt) / a;
-            if t0 < t_max && t0 > t_min {
-                let p = ray.point_at(t0);
-                return Some(Hit {
-                    t: t0,
-                    point: p,
-                    normal: (p - self.center) / self.radius,
-                    material: self.material,
-                });
-            } else if t1 < t_max && t1 > t_min {
-                let p = ray.point_at(t1);
-                return Some(Hit {
-                    t: t1,
-                    point: p,
-                    normal: (p - self.center) / self.radius,
-                    material: self.material,
-                });
+            let sqrt = discriminant.sqrt();
+            let t = -b - sqrt;
+            if t < t_max && t > t_min {
+                return Some(t);
+            }
+
+            let t = -b + sqrt;
+            if t < t_max && t > t_min {
+                return Some(t);
             }
         }
-
         None
     }
 }
@@ -77,18 +63,20 @@ struct World {
     // "Optimizing" xd, there are only spheres here! Only the world generation changes.
     // objects: Vec<Box<dyn Object>>
     objects: Vec<Sphere>,
+    materials: Vec<Material>,
 }
 
 impl World {
-    fn random_scene<R: Rng + ?Sized>(object_count: usize, rng: &mut R) -> World {
-        let mut objects = Vec::with_capacity(object_count + 4);
+    fn random_scene<R: Rng + ?Sized>(rng: &mut R) -> World {
+        let mut objects = Vec::new();
+        let mut materials = Vec::new();
 
         objects.push(Sphere {
             center: Vec3::new(0.0, -1000.0, 0.0),
             radius: 1000.0,
-            material: Material::Lambert {
-                albedo: Vec3::new(0.5, 0.5, 0.5),
-            },
+        });
+        materials.push(Material::Lambert {
+            albedo: Vec3::new(0.5, 0.5, 0.5),
         });
 
         for a in -11..11 {
@@ -101,7 +89,7 @@ impl World {
 
                 if (center - Vec3::new(4.0, 0.2, 0.0)).mag() > 0.9 {
                     let choose_mat = rng.gen::<f32>();
-                    let material = if choose_mat < 0.8 {
+                    materials.push(if choose_mat < 0.8 {
                         Material::Lambert {
                             albedo: Vec3::new(
                                 rng.gen::<f32>() * rng.gen::<f32>(),
@@ -122,12 +110,11 @@ impl World {
                         Material::Dielectric {
                             refractive_index: 1.5,
                         }
-                    };
+                    });
 
                     objects.push(Sphere {
                         center: center,
                         radius: 0.2,
-                        material: material,
                     });
                 }
             }
@@ -136,43 +123,59 @@ impl World {
         objects.push(Sphere {
             center: Vec3::new(0.0, 1.0, 0.0),
             radius: 1.0,
-            material: Material::Dielectric {
-                refractive_index: 1.5,
-            },
+        });
+        materials.push(Material::Dielectric {
+            refractive_index: 1.5,
         });
 
         objects.push(Sphere {
             center: Vec3::new(-4.0, 1.0, 0.0),
             radius: 1.0,
-            material: Material::Lambert {
-                albedo: Vec3::new(0.4, 0.2, 0.1),
-            },
+        });
+        materials.push(Material::Lambert {
+            albedo: Vec3::new(0.4, 0.2, 0.1),
         });
 
         objects.push(Sphere {
             center: Vec3::new(4.0, 1.0, 0.0),
             radius: 1.0,
-            material: Material::Metal {
-                albedo: Vec3::new(0.7, 0.6, 0.5),
-                roughness: 0.0,
-            },
+        });
+        materials.push(Material::Metal {
+            albedo: Vec3::new(0.7, 0.6, 0.5),
+            roughness: 0.0,
         });
 
-        World { objects: objects }
+        World {
+            objects: objects,
+            materials: materials,
+        }
     }
 }
 
 impl Object for World {
     fn hit(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<Hit> {
-        let mut nearest_hit: Option<Hit> = None;
-        let mut nearest_t = t_max;
-        for object in &self.objects {
-            if let Some(hit) = object.hit(ray, t_min, nearest_t) {
-                nearest_hit = Some(hit);
-                nearest_t = hit.t;
+        let mut nearest_t: f32 = t_max;
+        let mut hit_index: Option<usize> = None;
+        for (i, object) in self.objects.iter().enumerate() {
+            if let Some(t) = object.hit(ray, t_min, nearest_t) {
+                nearest_t = t;
+                hit_index = Some(i);
             }
         }
-        nearest_hit
+
+        if let Some(index) = hit_index {
+            let sphere = self.objects[index];
+            let material = self.materials[index];
+            let p = ray.point_at(nearest_t);
+            let n = (p - sphere.center) / sphere.radius;
+            return Some(Hit {
+                point: p,
+                normal: n,
+                material: material,
+            });
+        }
+
+        None
     }
 }
 
@@ -200,8 +203,8 @@ impl Camera {
         let half_height = (theta / 2.0).tan();
         let half_width = aspect_ratio * half_height;
 
-        let w = (look_from - look_at).normalized();
-        let u = up.cross(w).normalized();
+        let w = (look_from - look_at).unit();
+        let u = up.cross(w).unit();
         let v = w.cross(u);
 
         Camera {
@@ -223,9 +226,10 @@ impl Camera {
         let offset: Vec3 = self.u * rd[0] * self.lens_radius + self.v * rd[1] * self.lens_radius;
         Ray {
             origin: self.origin + offset,
-            direction: self.lower_left + self.horizontal * s + self.vertical * t
+            direction: (self.lower_left + self.horizontal * s + self.vertical * t
                 - self.origin
-                - offset,
+                - offset)
+                .unit(),
         }
     }
 }
@@ -238,7 +242,7 @@ enum Material {
 }
 
 fn refract(v: Vec3, n: Vec3, ni_over_nt: f32) -> Option<Vec3> {
-    let uv = v.normalized();
+    let uv = v.unit();
     let dt = uv.dot(n);
     let discriminant = 1.0 - ni_over_nt * ni_over_nt * (1.0 - dt * dt);
     if discriminant > 0.0 {
@@ -259,17 +263,17 @@ fn scatter<R: Rng + ?Sized>(ray: &Ray, hit: &Hit, rng: &mut R) -> Option<(Vec3, 
             let target = hit.point + hit.normal + Vec3::from(UnitSphere.sample(rng));
             let scattered = Ray {
                 origin: hit.point,
-                direction: target - hit.point,
+                direction: (target - hit.point).unit(),
             };
             return Some((albedo, scattered));
         }
         Material::Metal { albedo, roughness } => {
-            let reflected = ray.direction.normalized().reflect(hit.normal)
+            let reflected = ray.direction.unit().reflect(hit.normal)
                 + roughness * Vec3::from(UnitSphere.sample(rng));
             if reflected.dot(hit.normal) > 0.0 {
                 let scattered = Ray {
                     origin: hit.point,
-                    direction: reflected,
+                    direction: reflected.unit(),
                 };
                 return Some((albedo, scattered));
             }
@@ -290,7 +294,7 @@ fn scatter<R: Rng + ?Sized>(ray: &Ray, hit: &Hit, rng: &mut R) -> Option<(Vec3, 
                         Vec3::new(1.0, 1.0, 1.0),
                         Ray {
                             origin: hit.point,
-                            direction: refracted,
+                            direction: refracted.unit(),
                         },
                     ));
                 }
@@ -319,7 +323,7 @@ fn trace<R: Rng + ?Sized>(ray: Ray, world: &World, rng: &mut R, depth: i32) -> V
         }
         Vec3::new(0.0, 0.0, 0.0)
     } else {
-        let unit_direction = ray.direction.normalized();
+        let unit_direction = ray.direction.unit();
         let t = 0.5 * (unit_direction.y() + 1.0);
         Vec3::new(1.0, 1.0, 1.0) * (1.0 - t) + Vec3::new(0.5, 0.7, 1.0) * t
     }
@@ -366,7 +370,7 @@ fn main() {
         (from - at).mag(),
     );
 
-    let world = World::random_scene(500, &mut rng);
+    let world = World::random_scene(&mut rng);
 
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
@@ -398,7 +402,7 @@ impl Vec3 {
         Self { x: x, y: y, z: z }
     }
 
-    pub fn normalized(self) -> Vec3 {
+    pub fn unit(self) -> Vec3 {
         self * (1.0 / self.mag())
     }
 

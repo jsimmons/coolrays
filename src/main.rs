@@ -9,6 +9,13 @@ use rand_distr::{Distribution, UnitDisc, UnitSphere};
 use rand_pcg;
 
 #[derive(Copy, Clone, Debug)]
+enum Material {
+    Lambert { albedo: Vec3 },
+    Metal { albedo: Vec3, roughness: f32 },
+    Dielectric { refractive_index: f32 },
+}
+
+#[derive(Copy, Clone, Debug)]
 struct Ray {
     origin: Vec3,
     direction: Vec3,
@@ -233,14 +240,6 @@ impl Camera {
         }
     }
 }
-
-#[derive(Copy, Clone, Debug)]
-enum Material {
-    Lambert { albedo: Vec3 },
-    Metal { albedo: Vec3, roughness: f32 },
-    Dielectric { refractive_index: f32 },
-}
-
 fn refract(v: Vec3, n: Vec3, ni_over_nt: f32) -> Option<Vec3> {
     let uv = v.unit();
     let dt = uv.dot(n);
